@@ -26,38 +26,19 @@
 /* default experiment duration in miliseconds */
 #define DEFAULT_DURATION 1000
 
-/* the maximum value the key stored in the list can take; defines key range */
-#define DEFAULT_RANGE 2048
-
-#define TID_UNKNOWN -1
 
 static uint32_t finds;
-static uint32_t max_key;
-static uint32_t malloc_size;
+static uint32_t malloc_size = 8;
+static uint32_t size = 806400;
+static uint32_t count = 1;
 
 /* used to signal the threads when to stop */
 static ALIGNED(64) uint8_t running[64];
 
-/* per-thread seeds for the custom random function */
-__thread uint64_t *seeds;
 
-
-
-static struct vm_head vm[64];
-
-static thread_local int tid_v = TID_UNKNOWN;
-
-static _Atomic int_fast32_t tid_v_base;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static inline int tid(void)
-{
-    if (tid_v == TID_UNKNOWN) {
-        tid_v = atomic_fetch_add(&tid_v_base, 1);
-    }
-    return tid_v;
-}
 
 
 
@@ -97,22 +78,27 @@ void barrier_cross(barrier_t *b)
  */
 typedef ALIGNED(64) struct thread_data {
     barrier_t *barrier;  /* pointer to the global barrier */
+    uintptr_t *pad;
+    uintptr_t *address;
     unsigned long n_ops; /* operations each thread performs */
-    uint64_t n_add; /* elements each thread should add at beginning of exec */
-    unsigned long n_insert; /* number of inserts a thread performs */
-    unsigned long n_remove; /* number of removes a thread performs */
-    unsigned long n_search; /* number of searches a thread performs */
-    int id; /* the id of the thread (used for thread placement on cores) */
+    unsigned long n_malloc;
+    unsigned long n_free;
+    uintptr_t *pad2;
+    uintptr_t *pad3;
 } thread_data_t;
 
 
-void *test(void *data)
+
+void *testthrouput(void *data)
 {
     thread_data_t *d = (thread_data_t *) data; /* per-thread data */
 
     int last = -1;
 
     char *ptr = NULL;
+    vm_head_t vm;
+
+    int i = 0;
 
     /* Wait on barrier */
     barrier_cross(d->barrier);
@@ -120,24 +106,35 @@ void *test(void *data)
 
         if(last == -1) { // malloc
             #ifdef MY_MALLOC
-            ptr = (int*) vm_add(malloc_size,&vm[tid()]);
+            ptr = vm_add(malloc_size,&vm);
             #else
             ptr = malloc(malloc_size);
             #endif
-            last = 1;
+            d->address[i] = ptr;
+            *ptr = i++;
+            d->n_malloc++;
+            if(i >= count) {
+                i--;
+                last = 1;
+            }
         } else {
             #ifdef MY_MALLOC
-            vm_remove(ptr,malloc_size,&vm[tid()]);
+            vm_remove(d->address[i],malloc_size,&vm);
             #else
-            free(ptr);
+            free(d->address[i]);
             #endif
-            last = -1;
+            i--;
+            d->n_free++;
+            if(i < 0) {
+                i = 0;
+                last = -1;
+            }
         }
-        if(ptr)
-            d->n_ops++; 
+        d->n_ops++; 
     }
     return NULL;
 }
+
 
 void catcher(int sig)
 {
@@ -149,6 +146,8 @@ void catcher(int sig)
 
 int main(int argc, char *const argv[])
 {
+    printf("%d\n",sizeof(thread_data_t));
+
     pthread_t *threads;
     pthread_attr_t attr;
     barrier_t barrier;
@@ -162,13 +161,10 @@ int main(int argc, char *const argv[])
 
     /* initially, set parameters to their default values */
     int n_threads = DEFAULT_NUM_THREADS;
-    max_key = DEFAULT_RANGE;
     uint32_t updates = DEFAULT_UPDATES;
     finds = DEFAULT_READS;
-    malloc_size = 8;
     int duration = DEFAULT_DURATION;
-    atomic_init(&tid_v_base,0);
-
+    
     /* now read the parameters in case the user provided values for them.
      * we use getopt, the same skeleton may be used for other bechmarks,
      * though the particular parameters may be different.
@@ -177,8 +173,8 @@ int main(int argc, char *const argv[])
         /* These options don't set a flag */
         {"help", no_argument, NULL, 'h'},
         {"duration", required_argument, NULL, 'd'},
-        {"range", required_argument, NULL, 'r'},
-        {"initial", required_argument, NULL, 'i'},
+        {"malloc-size", required_argument, NULL, 's'},
+        {"malloc-free-pair-count", required_argument, NULL, 'c'},
         {"num-threads", required_argument, NULL, 'n'},
         {"updates", required_argument, NULL, 'u'},
         {NULL, 0, NULL, 0}};
@@ -186,7 +182,7 @@ int main(int argc, char *const argv[])
     /* actually get the parameters form the command-line */
     while (1) {
         int i = 0;
-        int c = getopt_long(argc, argv, "hd:n:l:u:i:r:", long_options, &i);
+        int c = getopt_long(argc, argv, "hd:n:u:c:s:", long_options, &i);
         if (c == -1) // all parsed
             break;
         if (c == 0 && long_options[i].flag == 0)
@@ -209,8 +205,10 @@ int main(int argc, char *const argv[])
                    "        Test duration in milliseconds (0=infinite, default=" XSTR(DEFAULT_DURATION) ")\n"
                    "  -u, --updates <int>\n"
                    "        Percentage of update operations (default=" XSTR(DEFAULT_UPDATES) ")\n"
-                   "  -r, --range <int>\n"
-                   "        Key range (default=" XSTR(DEFAULT_RANGE) ")\n"
+                   "  -s, --mallocsize <int>\n"
+                   "        malloc size (default=8)\n"
+                   "  -c, --mallocfreepair <int>\n"
+                   "        malloc-free-pair count (default=1)\n"
                    "  -n, --num-threads <int>\n"
                    "        Number of threads (default=" XSTR(DEFAULT_NUM_THREADS) ")\n",
 		   argv[0]
@@ -223,13 +221,11 @@ int main(int argc, char *const argv[])
             updates = atoi(optarg);
             finds = 100 - updates;
             break;
-        case 'r':
-            // max_key = atoi(optarg);
+        case 's':
             malloc_size = atoi(optarg);
             break;
-        case 'i':
-            break;
-        case 'l':
+        case 'c':
+            count = atoi(optarg);
             break;
         case 'n':
             n_threads = atoi(optarg);
@@ -242,11 +238,9 @@ int main(int argc, char *const argv[])
         }
     }
 
-    max_key--;
-    /* we round the max key up to the nearest power of 2, which makes our random
-     * key generation more efficient.
-     */
-    max_key = next_power_of_two(max_key) - 1;
+    size = size / n_threads;
+    uintptr_t address[n_threads][size];
+
 
 
 
@@ -275,16 +269,13 @@ int main(int argc, char *const argv[])
 
     /* set the data for each thread and create the threads */
     for (int i = 0; i < n_threads; i++) {
-        data[i].id = i;
+        // data[i].id = i;
         data[i].n_ops = 0;
-        data[i].n_insert = 0;
-        data[i].n_remove = 0;
-        data[i].n_search = 0;
-        data[i].n_add = max_key / (2 * n_threads);
-        if (i < ((max_key / 2) % n_threads))
-            data[i].n_add++;
+        data[i].address = &address[i];
+        data[i].n_malloc = 0;
+        data[i].n_free = 0;
         data[i].barrier = &barrier;
-        if (pthread_create(&threads[i], &attr, test, (void *) (&data[i])) !=
+        if (pthread_create(&threads[i], &attr, testthrouput, (void *) (&data[i])) !=
             0) {
             fprintf(stderr, "Error creating thread\n");
             exit(1);
@@ -333,19 +324,14 @@ int main(int argc, char *const argv[])
     for (int i = 0; i < n_threads; i++) {
         printf("Thread %d\n", i);
         printf("  #operations   : %lu\n", data[i].n_ops);
-        printf("  #inserts   : %lu\n", data[i].n_insert);
-        printf("  #removes   : %lu\n", data[i].n_remove);
+        printf("  #malloc   : %lu\n", data[i].n_malloc);
+        printf("  #free   : %lu\n", data[i].n_free);
         operations += data[i].n_ops;
-        reported_total = reported_total + data[i].n_add + data[i].n_insert -
-                         data[i].n_remove;
     }
 
     printf("Duration      : %d (ms)\n", duration);
     printf("#txs     : %lu (%f / s)\n", operations,
            operations * 1000.0 / duration);
-    // printf("Expected size: %ld Actual size: %d\n", reported_total,
-    //        list_size(the_list));
-
 
     free(threads);
     free(data);

@@ -38,9 +38,10 @@ static inline p_rel _setaddr(p_rel *i, char *p)
 
 
 
-// size align to 8 byte
+// size align up to 8 byte
 int align_up(int sz) {
-    return ((sz + 7) >> 3) << 3; 
+    // return ((sz + 7) >> 3) << 3; 
+    return (sz + 7) & ~7;
 }
 void push(my_stack_t *s, reuse_block_t *rb) {
     rb->next = s->next;
@@ -65,7 +66,7 @@ vm_t *vm_new()
     node->max = N_VM_ELEMENTS;
     node->next = NULL; /* for clarity */
 
-    setaddr(node->array[0], node->str);
+    setaddr(node->array[0], node->raw);
 
     /* prevent compilers from optimizing assignments out */
     OPTFENCE(node);
@@ -97,7 +98,7 @@ uintptr_t vm_add(size_t sz, struct vm_head *head)
 {
     sz = align_up(sz);
 
-    uintptr_t block = pop(&head->pool.s[(sz >> 3) - 1]);
+    uintptr_t block = pop(&head->freed[(sz >> 3) - 1]);
     if(block)
         return block;
 
@@ -124,6 +125,5 @@ void vm_remove(uintptr_t ptr, int sz, struct vm_head *head) {
     if(sz == 0 || !ptr)
         return;
     sz = align_up(sz);
-    push(&head->pool.s[(sz >> 3) - 1],ptr);
+    push(&head->freed[(sz >> 3) - 1],ptr);
 }
-

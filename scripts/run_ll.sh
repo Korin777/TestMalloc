@@ -29,7 +29,7 @@ do
         out="$out_dir/ll.s$size.dat";
         scripts/scalability2.sh "$cores" \
             main main_MY_MALLOC \
-            -d$duration -r$size | tee $out;
+            -d$duration -s$size -c1 | tee $out;
 #     done
 # done
 done

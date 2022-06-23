@@ -18,7 +18,7 @@
  * The notify dirlist ist dynamically grown.
  */
 // #define N_VM_ELEMENTS (PAGESIZE / 16) // N_VM_ELEMENTS 256
-#define N_VM_ELEMENTS 170
+#define N_VM_ELEMENTS (PAGESIZE / 8)
 
 /* Avoids with uint32 the penalty of unaligned memory access */
 typedef unsigned int p_rel;
@@ -33,22 +33,19 @@ typedef struct Stack {
     reuse_block_t *next;
     int size;
 } my_stack_t;
-typedef struct mem_pool {
-    my_stack_t s[256]; // 8,16,24,...,2048     
-} mem_pool_t;
 
 
 // Memory allocator
 typedef struct __vm {
-    p_rel array[N_VM_ELEMENTS]; // 4*256
-    struct __vm *next; // 8
-    _Atomic int max, use; // 4 + 4
+    p_rel array[N_VM_ELEMENTS];
+    struct __vm *next;
+    _Atomic int max, use; 
     /* dynamic string section starts here */
-    char str[0]; // 3056
+    char raw[0];
 } vm_t; // 4096
 typedef struct vm_head {
     vm_t *next;
-    mem_pool_t pool;
+    my_stack_t freed[256]; // 8,16,24,...,2048     
 } vm_head_t;
 
 
@@ -62,4 +59,3 @@ static vm_t *vm_extend_map(vm_head_t *head);
 uintptr_t vm_add(size_t sz, vm_head_t *head);
 
 void vm_remove(uintptr_t ptr, int sz, struct vm_head *head);
-

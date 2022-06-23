@@ -18,6 +18,7 @@ rm -f $plot_dir/* >> /dev/null;
 # update_all="0 10 50";
 
 sizes="8 16 24"
+count="1"
 for size in $sizes;
 do
 # for update in $update_all
@@ -34,7 +35,7 @@ do
 	    dat="$dat_dir/$app.s$size.dat";
 	    gp="$gp_dir/$app.s$size.gp";
 	    png="$plot_dir/$app.s$size.png";
-	    title="malloc vs. my\\\_malloc / Malloc\\\_Size: $size";
+	    title="malloc vs. my\\\_malloc / Malloc\\\_Size: $size Count: $count";
 
 	    cp $gp_template $gp
 
